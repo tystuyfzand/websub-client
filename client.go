@@ -204,15 +204,32 @@ func (c *Client) Subscribe(opts SubscribeOptions) (*model.Subscription, error) {
 	return sub, nil
 }
 
-// Unsubscribe sends an unsubscription request to the hub
-func (c *Client) Unsubscribe(unsubscribeReq model.UnsubscribeRequest) error {
-	topicURL, hubUrl, err := c.Discover(unsubscribeReq.Topic)
+// UnsubscribeOptions allows the use of a custom Hub for unsubscribes.
+// This used to be UnsubscribeRequest from the base model, but was changed for simplicity.
+type UnsubscribeOptions struct {
+	Hub      string
+	Topic    string
+	Callback string
+}
 
-	if err != nil {
-		return err
+// Unsubscribe sends an unsubscription request to the hub
+func (c *Client) Unsubscribe(opts UnsubscribeOptions) error {
+	topicURL := opts.Topic
+	var hubURL string
+
+	if opts.Hub == "" {
+		var err error
+
+		topicURL, hubURL, err = c.Discover(opts.Topic)
+
+		if err != nil {
+			return err
+		}
+	} else {
+		hubURL = opts.Hub
 	}
 
-	sub, err := c.store.Get(topicURL, unsubscribeReq.Callback)
+	sub, err := c.store.Get(topicURL, opts.Callback)
 
 	if err != nil {
 		return err
@@ -220,9 +237,9 @@ func (c *Client) Unsubscribe(unsubscribeReq model.UnsubscribeRequest) error {
 
 	c.pendingUnsubscribes = append(c.pendingUnsubscribes, *sub)
 
-	body := encodeForm(unsubscribeReq)
+	body := encodeForm(opts)
 
-	req, err := http.NewRequest(http.MethodPost, hubUrl, strings.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, hubURL, strings.NewReader(body))
 
 	if err != nil {
 		return err
