@@ -68,5 +68,5 @@ gopkg.in/errgo.v2 v2.1.0/go.mod h1:hNsd1EY+bozCKY1Ytp96fpM3vjJbqLJn88ws8XvfDNI=
 gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b h1:h8qDotaEPuJATrMmW04NCwg7v22aHH28wwpauUhK9Oo=
 gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-meow.tf/websub v1.1.1 h1:ErdaytI11/9oGoPKhiWHnvlp3EW8x1hqrhqKc0WZkLM=
-meow.tf/websub v1.1.1/go.mod h1:0sWbOxaqyfmpna5Nphl8v86TPo2SNT6Jxot1E4VKjXg=
+meow.tf/websub v1.2.0 h1:0J3HQ8VaPa3QNiBhIs2SnJkRfQ6T+KgQiHX1QObM5HE=
+meow.tf/websub v1.2.0/go.mod h1:UTSYw2YdUKY29wz3I4ELzERxyypQS28svrNXKZ1EUMk=

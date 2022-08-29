@@ -8,7 +8,7 @@ require (
 	github.com/mmcdole/goxpp v0.0.0-20181012175147-0068e33feabf
 	github.com/tomnomnom/linkheader v0.0.0-20180905144013-02ca5825eb80
 	golang.org/x/net v0.0.0-20210916014120-12bc252f5db8
-	meow.tf/websub v1.1.1
+	meow.tf/websub v1.2.0
 )
 
 require (
