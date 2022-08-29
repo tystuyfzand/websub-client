@@ -1,37 +1,37 @@
 package client
 
 import (
-    "crypto/hmac"
-    "crypto/sha256"
-    "encoding/hex"
-    "errors"
-    "fmt"
-    "github.com/go-playground/validator/v10"
-    "io"
-    "log"
-    "meow.tf/websub/handler"
-    "meow.tf/websub/model"
-    "meow.tf/websub/store"
-    "meow.tf/websub/store/memory"
-    "net/http"
-    "net/url"
-    "strconv"
-    "strings"
-    "time"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"github.com/go-playground/validator/v10"
+	"io"
+	"log"
+	"meow.tf/websub/handler"
+	"meow.tf/websub/model"
+	"meow.tf/websub/store"
+	"meow.tf/websub/store/memory"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
 )
 
 const (
-    formTag = "form"
-    formContentType = "application/x-www-form-urlencoded"
+	formTag         = "form"
+	formContentType = "application/x-www-form-urlencoded"
 )
 
 var (
-    ErrNoHub = errors.New("hub not found")
-    ErrNoSelf = errors.New("self link not found")
-    ErrNoChallenge = errors.New("no challenge specified")
-    ErrInvalidLease = errors.New("invalid lease duration")
+	ErrNoHub        = errors.New("hub not found")
+	ErrNoSelf       = errors.New("self link not found")
+	ErrNoChallenge  = errors.New("no challenge specified")
+	ErrInvalidLease = errors.New("invalid lease duration")
 
-    DefaultLease = 24 * time.Hour
+	DefaultLease = 24 * time.Hour
 )
 
 // Option is an option type for definition client options
@@ -39,363 +39,392 @@ type Option func(c *Client)
 
 // WithStore sets the Client's subscription store
 func WithStore(s store.Store) Option {
-    return func(c *Client) {
-        c.store = s
-    }
+	return func(c *Client) {
+		c.store = s
+	}
 }
 
 // WithCallbackBase sets the base callback url
 func WithCallbackBase(base string) Option {
-    return func(c *Client) {
-        c.callbackBase = base
-    }
+	return func(c *Client) {
+		c.callbackBase = base
+	}
 }
 
 // WithHttpClient lets you override the client's http client
 func WithHttpClient(client *http.Client) Option {
-    return func(c *Client) {
-        c.client = client
-    }
+	return func(c *Client) {
+		c.client = client
+	}
 }
 
 // WithLeaseDuration lets you override the default lease duration request
 func WithLeaseDuration(duration time.Duration) Option {
-    return func(c *Client) {
-        c.leaseDuration = duration
-    }
+	return func(c *Client) {
+		c.leaseDuration = duration
+	}
 }
 
 // New creates a new client with the specified callback base url and options
 func New(callbackBase string, options ...Option) *Client {
-    c := &Client{
-        Handler: handler.New(),
-        client: &http.Client{
-            Timeout: 30 * time.Second,
-        },
-        callbackBase: callbackBase,
-        leaseDuration: DefaultLease,
-        validator: validator.New(),
-        store: memory.New(),
-    }
+	c := &Client{
+		Handler: handler.New(),
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+		callbackBase:  callbackBase,
+		leaseDuration: DefaultLease,
+		validator:     validator.New(),
+		store:         memory.New(),
+	}
 
-    for _, opt := range options {
-        opt(c)
-    }
+	for _, opt := range options {
+		opt(c)
+	}
 
-    return c
+	return c
 }
 
 // Client represents a websub client
 type Client struct {
-    *handler.Handler
-    client *http.Client
-    store store.Store
-    callbackBase string
-    leaseDuration time.Duration
-    validator *validator.Validate
+	*handler.Handler
+	client        *http.Client
+	store         store.Store
+	callbackBase  string
+	leaseDuration time.Duration
+	validator     *validator.Validate
 
-    pendingSubscribes []model.Subscription
-    pendingUnsubscribes []model.Subscription
+	pendingSubscribes   []model.Subscription
+	pendingUnsubscribes []model.Subscription
 }
 
 // SubscribeOptions are options sent to the hub for subscriptions
 type SubscribeOptions struct {
-    Topic string
-    Callback string
-    Secret string
-    Lease time.Duration
+	Hub      string
+	Topic    string
+	Callback string
+	Secret   string
+	Lease    time.Duration
 }
 
 // Subscribe creates a new websub request
 func (c *Client) Subscribe(opts SubscribeOptions) (*model.Subscription, error) {
-    topicURL, hubUrl, err := c.Discover(opts.Topic)
+	topicURL := opts.Topic
+	var hubURL string
 
-    if err != nil {
-        return nil, err
-    }
+	if opts.Hub == "" {
+		var err error
 
-    if opts.Callback == "" && c.callbackBase != "" {
-        subHash := sha256.New().Sum([]byte(topicURL))
+		topicURL, hubURL, err = c.Discover(opts.Topic)
 
-        opts.Callback = c.callbackBase + "/" + hex.EncodeToString(subHash)
-    }
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		hubURL = opts.Hub
+	}
 
-    u, err := url.Parse(opts.Callback)
+	if opts.Callback == "" && c.callbackBase != "" {
+		subHash := sha256.New().Sum([]byte(topicURL))
 
-    if err != nil {
-        return nil, err
-    }
+		opts.Callback = c.callbackBase + "/" + hex.EncodeToString(subHash)
+	}
 
-    if c.callbackBase == "" {
-        c.callbackBase = u.Scheme + "://" + u.Host
-    }
+	u, err := url.Parse(opts.Callback)
 
-    subscribeReq := model.SubscribeRequest{
-        Mode: model.ModeSubscribe,
-        Topic: topicURL,
-        Callback: opts.Callback,
-        Secret: opts.Secret,
-        LeaseSeconds: int(c.leaseDuration / time.Second),
-    }
+	if err != nil {
+		return nil, err
+	}
 
-    if opts.Lease > 0 {
-        subscribeReq.LeaseSeconds = int(opts.Lease / time.Second)
-    }
+	if c.callbackBase == "" {
+		c.callbackBase = u.Scheme + "://" + u.Host
+	}
 
-    if err = c.validator.Struct(subscribeReq); err != nil {
-        return nil, err
-    }
+	subscribeReq := model.SubscribeRequest{
+		Mode:         model.ModeSubscribe,
+		Topic:        topicURL,
+		Callback:     opts.Callback,
+		Secret:       opts.Secret,
+		LeaseSeconds: int(c.leaseDuration / time.Second),
+	}
 
-    sub, err := c.store.Get(topicURL, subscribeReq.Callback)
+	if opts.Lease > 0 {
+		subscribeReq.LeaseSeconds = int(opts.Lease / time.Second)
+	}
 
-    if sub == nil {
-        sub = &model.Subscription{
-            Topic: topicURL,
-            Callback: opts.Callback,
-        }
-    }
+	if err = c.validator.Struct(subscribeReq); err != nil {
+		return nil, err
+	}
 
-    err = c.store.Add(*sub)
+	sub, err := c.store.Get(topicURL, subscribeReq.Callback)
 
-    if err != nil {
-        return nil, err
-    }
+	if sub == nil {
+		sub = &model.Subscription{
+			Topic:    topicURL,
+			Callback: opts.Callback,
+		}
+	}
 
-    c.pendingSubscribes = append(c.pendingSubscribes, *sub)
+	err = c.store.Add(*sub)
 
-    body := encodeForm(subscribeReq)
+	if err != nil {
+		return nil, err
+	}
 
-    req, err := http.NewRequest(http.MethodPost, hubUrl, strings.NewReader(body))
+	c.pendingSubscribes = append(c.pendingSubscribes, *sub)
 
-    if err != nil {
-        return nil, err
-    }
+	body := encodeForm(subscribeReq)
 
-    req.Header.Set("Content-Type", formContentType)
+	req, err := http.NewRequest(http.MethodPost, hubURL, strings.NewReader(body))
 
-    res, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
 
-    if err != nil {
-        return nil, err
-    }
+	req.Header.Set("Content-Type", formContentType)
 
-    defer res.Body.Close()
+	res, err := c.client.Do(req)
 
-    return sub, nil
+	if err != nil {
+		return nil, err
+	}
+
+	defer res.Body.Close()
+
+	b, err := io.ReadAll(res.Body)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode != http.StatusAccepted {
+		return nil, fmt.Errorf("unexpected response code %d: %s", res.StatusCode, string(b))
+	}
+
+	return sub, nil
 }
 
 // Unsubscribe sends an unsubscription request to the hub
 func (c *Client) Unsubscribe(unsubscribeReq model.UnsubscribeRequest) error {
-    topicURL, hubUrl, err := c.Discover(unsubscribeReq.Topic)
+	topicURL, hubUrl, err := c.Discover(unsubscribeReq.Topic)
 
-    if err != nil {
-        return err
-    }
+	if err != nil {
+		return err
+	}
 
-    sub, err := c.store.Get(topicURL, unsubscribeReq.Callback)
+	sub, err := c.store.Get(topicURL, unsubscribeReq.Callback)
 
-    if err != nil {
-        return err
-    }
+	if err != nil {
+		return err
+	}
 
-    c.pendingUnsubscribes = append(c.pendingUnsubscribes, *sub)
+	c.pendingUnsubscribes = append(c.pendingUnsubscribes, *sub)
 
-    body := encodeForm(unsubscribeReq)
+	body := encodeForm(unsubscribeReq)
 
-    req, err := http.NewRequest(http.MethodPost, hubUrl, strings.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, hubUrl, strings.NewReader(body))
 
-    if err != nil {
-        return err
-    }
+	if err != nil {
+		return err
+	}
 
-    req.Header.Set("Content-Type", formContentType)
+	req.Header.Set("Content-Type", formContentType)
 
-    res, err := c.client.Do(req)
+	res, err := c.client.Do(req)
 
-    if err != nil {
-        return err
-    }
+	if err != nil {
+		return err
+	}
 
-    defer res.Body.Close()
+	defer res.Body.Close()
 
-    return nil
+	b, err := io.ReadAll(res.Body)
+
+	if err != nil {
+		return err
+	}
+
+	if res.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("unexpected response code %d: %s", res.StatusCode, string(b))
+	}
+
+	return nil
 }
 
 // VerifySubscription lets other handlers pass subscriptions, unsubscribes, and denied errors themselves.
 func (c *Client) VerifySubscription(mode, topic, requestUrl string, v url.Values) ([]byte, error) {
-    switch mode {
-    case model.ModeSubscribe:
-        challenge := v.Get("hub.challenge")
+	switch mode {
+	case model.ModeSubscribe:
+		challenge := v.Get("hub.challenge")
 
-        if challenge == "" {
-            return nil, ErrNoChallenge
-        }
+		if challenge == "" {
+			return nil, ErrNoChallenge
+		}
 
-        var sub *model.Subscription
+		var sub *model.Subscription
 
-        for i, s := range c.pendingSubscribes {
-            if s.Topic == topic && s.Callback == requestUrl {
-                sub = &s
+		for i, s := range c.pendingSubscribes {
+			if s.Topic == topic && s.Callback == requestUrl {
+				sub = &s
 
-                c.pendingSubscribes = remove(c.pendingSubscribes, i)
-                break
-            }
-        }
+				c.pendingSubscribes = remove(c.pendingSubscribes, i)
+				break
+			}
+		}
 
-        if sub == nil {
-            return nil, store.ErrNotFound
-        }
+		if sub == nil {
+			return nil, store.ErrNotFound
+		}
 
-        leaseSeconds, err := strconv.Atoi(v.Get("hub.lease_seconds"))
+		leaseSeconds, err := strconv.Atoi(v.Get("hub.lease_seconds"))
 
-        if err != nil {
-            return nil, ErrInvalidLease
-        }
+		if err != nil {
+			return nil, ErrInvalidLease
+		}
 
-        sub.LeaseTime = time.Duration(leaseSeconds) * time.Second
-        sub.Expires = time.Now().Add(sub.LeaseTime)
+		sub.LeaseTime = time.Duration(leaseSeconds) * time.Second
+		sub.Expires = time.Now().Add(sub.LeaseTime)
 
-        err = c.store.Add(*sub)
+		err = c.store.Add(*sub)
 
-        if err != nil {
-            return nil, err
-        }
+		if err != nil {
+			return nil, err
+		}
 
-        return []byte(challenge), nil
-    case model.ModeDenied:
-        var sub *model.Subscription
+		return []byte(challenge), nil
+	case model.ModeDenied:
+		var sub *model.Subscription
 
-        for i, s := range c.pendingSubscribes {
-            if s.Topic == topic && s.Callback == requestUrl {
-                sub = &s
+		for i, s := range c.pendingSubscribes {
+			if s.Topic == topic && s.Callback == requestUrl {
+				sub = &s
 
-                c.pendingSubscribes = remove(c.pendingSubscribes, i)
-                break
-            }
-        }
+				c.pendingSubscribes = remove(c.pendingSubscribes, i)
+				break
+			}
+		}
 
-        if sub == nil {
-            return nil, store.ErrNotFound
-        }
+		if sub == nil {
+			return nil, store.ErrNotFound
+		}
 
-        return nil, fmt.Errorf("subscription denied: %s", v.Get("hub.reason"))
-    case model.ModeUnsubscribe:
-        challenge := v.Get("hub.challenge")
+		return nil, fmt.Errorf("subscription denied: %s", v.Get("hub.reason"))
+	case model.ModeUnsubscribe:
+		challenge := v.Get("hub.challenge")
 
-        if challenge == "" {
-            return nil, ErrNoChallenge
-        }
+		if challenge == "" {
+			return nil, ErrNoChallenge
+		}
 
-        var sub *model.Subscription
+		var sub *model.Subscription
 
-        for i, s := range c.pendingUnsubscribes {
-            if s.Topic == topic {
-                sub = &s
+		for i, s := range c.pendingUnsubscribes {
+			if s.Topic == topic {
+				sub = &s
 
-                c.pendingUnsubscribes = remove(c.pendingUnsubscribes, i)
-                break
-            }
-        }
+				c.pendingUnsubscribes = remove(c.pendingUnsubscribes, i)
+				break
+			}
+		}
 
-        err := c.store.Remove(*sub)
+		err := c.store.Remove(*sub)
 
-        if err != nil {
-            return nil, err
-        }
+		if err != nil {
+			return nil, err
+		}
 
+		return []byte(challenge), nil
+	}
 
-        return []byte(challenge), nil
-    }
-
-    return nil, nil
+	return nil, nil
 }
 
 // ServeHTTP lets this client be used as a handler for HTTP servers.
 func (c *Client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-    v, err := url.ParseQuery(r.URL.RawQuery)
+	v, err := url.ParseQuery(r.URL.RawQuery)
 
-    if err != nil {
-        w.WriteHeader(http.StatusBadRequest)
-        return
-    }
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
-    requestUrl := c.callbackBase + r.RequestURI
+	requestUrl := c.callbackBase + r.RequestURI
 
-    if idx := strings.Index(requestUrl, "?"); idx != -1 {
-        requestUrl = requestUrl[0:idx]
-    }
+	if idx := strings.Index(requestUrl, "?"); idx != -1 {
+		requestUrl = requestUrl[0:idx]
+	}
 
-    mode := v.Get("hub.mode")
-    topic := v.Get("hub.topic")
+	mode := v.Get("hub.mode")
+	topic := v.Get("hub.topic")
 
-    if mode != "" {
-        res, err := c.VerifySubscription(mode, topic, requestUrl, v)
+	if mode != "" {
+		res, err := c.VerifySubscription(mode, topic, requestUrl, v)
 
-        if err != nil {
-            w.WriteHeader(http.StatusInternalServerError)
-            return
-        }
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 
-        if res != nil {
-            w.Write(res)
-        }
+		if res != nil {
+			w.Write(res)
+		}
 
-        return
-    }
+		return
+	}
 
-    log.Println("Request that doesn't have a mode")
+	log.Println("Request that doesn't have a mode")
 
-    // Verify subscription exists
-    subs, err := c.store.For(requestUrl)
+	// Verify subscription exists
+	subs, err := c.store.For(requestUrl)
 
-    if err != nil || len(subs) < 1 {
-        w.WriteHeader(http.StatusNotFound)
-        return
-    }
+	if err != nil || len(subs) < 1 {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
 
-    hubSignature := r.Header.Get("X-Hub-Signature")
+	hubSignature := r.Header.Get("X-Hub-Signature")
 
-    sub := subs[0]
+	sub := subs[0]
 
-    b, err := io.ReadAll(r.Body)
+	b, err := io.ReadAll(r.Body)
 
-    if err != nil {
-        return
-    }
+	if err != nil {
+		return
+	}
 
-    if sub.Secret != "" {
-        if hubSignature == "" {
-            w.WriteHeader(http.StatusForbidden)
-            return
-        }
+	if sub.Secret != "" {
+		if hubSignature == "" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 
-        if !ValidateSignature(b, sub.Secret, hubSignature) {
-            w.WriteHeader(http.StatusForbidden)
-            return
-        }
-    }
+		if !ValidateSignature(b, sub.Secret, hubSignature) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+	}
 
-    c.Call(&Publish{
-        Subscription: sub,
-        ContentType: r.Header.Get("Content-Type"),
-        Data: b,
-    })
+	c.Call(&Publish{
+		Subscription: sub,
+		ContentType:  r.Header.Get("Content-Type"),
+		Data:         b,
+	})
 }
 
 // ValidateSignature is a helper method to validate a signature a hub sends.
 func ValidateSignature(body []byte, secret, signature string) bool {
-    splitIdx := strings.Index(signature, "=")
+	splitIdx := strings.Index(signature, "=")
 
-    if splitIdx == -1 {
-        return false
-    }
+	if splitIdx == -1 {
+		return false
+	}
 
-    hasher := signature[0:splitIdx]
+	hasher := signature[0:splitIdx]
 
-    signature = signature[splitIdx+1:]
+	signature = signature[splitIdx+1:]
 
-    mac := hmac.New(newHash(hasher), []byte(secret))
-    mac.Write(body)
+	mac := hmac.New(newHash(hasher), []byte(secret))
+	mac.Write(body)
 
-    return signature == hex.EncodeToString(mac.Sum(nil))
+	return signature == hex.EncodeToString(mac.Sum(nil))
 }
